@@ -35,6 +35,7 @@ dependencies = [
                           # 它 import torchvision。缺了不报错，只是情绪归因器**静默**
                           # 退回纯声学象限——"我喜欢草莓"会判成悲伤，右脑整个不准。
     "transformers==4.52.3",
+    "huggingface-hub>=0.30,<1.0",  # transformers 4.52 rejects huggingface-hub 1.x
     "accelerate",         # 情绪归因 from_pretrained(device_map="auto") 要它，
                           # 缺了同样是静默退化，不是报错。
     "funasr",             # 流式 ASR（默认）

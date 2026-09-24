@@ -267,6 +267,33 @@ For each memory object, ALSO output an "attribute" field (string):
 """
 
 
+# Groq's on-demand tier for gpt-oss-120b has a substantially smaller TPM budget
+# than the full upstream Mem0 prompt (about 13k tokens before any useful output).
+# Keep the same output contract and extraction rules, but omit the hundreds of
+# few-shot examples. Other OpenAI-compatible providers retain the upstream prompt.
+_COMPACT_EXTRACTION_SYSTEM = """You are a precise, evidence-bound memory extractor.
+Extract durable, useful facts from the supplied conversation. Return valid JSON only.
+
+Output an object with a "memory" array. Each item must contain:
+- "id": a unique string within this response
+- "text": one self-contained factual memory
+- "event": "ADD"
+- "attributed_to": the speaker or "user"
+- "attribute": a short English subject+attribute phrase without its value for a
+  changeable personal property, otherwise "" for events and narratives
+
+Rules:
+- Extract explicit personal facts, preferences, relationships, work, plans,
+  experiences, recurring problems, and useful facts from shared material.
+- Split distinct facts into separate items; deduplicate equivalent facts.
+- Preserve names and enough context for each memory to make sense alone.
+- Use the same language as the source text. Never invent or infer unsupported facts.
+- Do not store greetings, audibility checks, transient requests, assistant echoes,
+  or meta-statements such as "the user asked...".
+- An empty memory array is correct when there is no durable fact.
+"""
+
+
 class OpenAIMem0V3AdditiveExtractor:
     """OpenAI Chat + Mem0 additive system/user prompt 抽取。"""
 
@@ -323,6 +350,8 @@ class OpenAIMem0V3AdditiveExtractor:
         # 右脑于是每轮都拿到空的，一个节点都长不出来。见 merged_extraction。
         from voicemem.leftbrain import merged_extraction
         system = self._system
+        if "api.groq.com" in str(self._cfg.base_url or "").lower():
+            system = _COMPACT_EXTRACTION_SYSTEM
         if merged_extraction.enabled():
             user_content = user_content + merged_extraction.prompt_addendum()
             _MERGED_UTTERANCE["text"] = " ".join(

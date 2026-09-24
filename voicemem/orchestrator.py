@@ -225,6 +225,11 @@ class Orchestrator:
             raise ValueError("mode 必须是 " + " / ".join(_NEED))
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key
+        if base_url:
+            # Some lazily-created OpenAI-compatible clients resolve their endpoint
+            # directly from the SDK environment (for example ConflictResolver).
+            # Mirror the explicit endpoint so none can silently hit api.openai.com.
+            os.environ["OPENAI_BASE_URL"] = base_url
         self.mode = mode
         # embedder / vector_store / classifier 是同三个能力的旧参数名，收进来一起
         # 归一（见 _ALIASES）：它们收对象、能力名那路收工厂，Utils.get 两种都认，

@@ -48,6 +48,7 @@ provider → 内置实现 的映射（傻瓜清晰，一眼看懂）：
                                      指挥语气；权重非商用许可，故不做默认）
     models                 五个角色的模型名，见 voicemem/llm_config.py
     llm.provider           openai -> 落 models.chat / OPENAI_API_KEY / OPENAI_BASE_URL
+                           groq   -> 从 GROQ_API_KEY 配 Groq 的 OpenAI 兼容端点
     reply.provider         openai -> voicemem.reply.openai_reply（内置，流式）
                            custom -> config.fn 里那个可调用对象（等价于 VoiceMem(reply=fn)）
 
@@ -285,8 +286,25 @@ def build_kwargs(config: dict) -> dict:
     #    也透传给 VoiceMem 参数，保持和顶层一致）。──
     if "llm" in config:
         provider, cfg = _split(config["llm"])
-        if provider not in (None, "openai"):
-            _bad("llm", provider, ["openai"])
+        if provider not in (None, "openai", "groq"):
+            _bad("llm", provider, ["openai", "groq"])
+
+        # Groq implements the OpenAI chat protocol, so the existing Left Brain
+        # clients remain unchanged.  Keep the unavoidable OPENAI_* aliases here:
+        # a few lazy components (notably ConflictResolver) let the OpenAI SDK
+        # resolve credentials/endpoint from its standard environment variables.
+        # The public input remains GROQ_API_KEY and no secret is logged.
+        if provider == "groq":
+            groq_key = cfg.get("api_key") or os.environ.get("GROQ_API_KEY")
+            if not groq_key:
+                raise ValueError('llm.provider="groq" 需要 GROQ_API_KEY')
+            cfg = {
+                "model": "openai/gpt-oss-120b",
+                "base_url": "https://api.groq.com/openai/v1",
+                **cfg,
+                "api_key": groq_key,
+            }
+
         if cfg.get("model"):
             # 只落在 MODELS 上，不再顺手写 env：查过了，OPENAI_MODEL 没有任何
             # 第三方库读（openai SDK / mem0 都不读），写它纯粹是让全局状态多一份

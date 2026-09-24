@@ -1,0 +1,46 @@
+{
+  "space": {
+    "name": "groq_rightbrain_memory",
+    "created_at": "2026-09-22T23:34:33+00:00",
+    "updated_at": "2026-09-22T23:35:15+00:00",
+    "user_id": "voice_user",
+    "mode": "text_mode",
+    "counts": {},
+    "language": "en"
+  },
+  "left_brain": {
+    "role": "事实记忆：说了什么、什么时候、涉及谁",
+    "storage": "groq_rightbrain_memory.sqlite",
+    "tables": [
+      "memories",
+      "entities",
+      "entity_edges",
+      "memory_tags",
+      "slot_profiles",
+      "graph_entities"
+    ]
+  },
+  "right_brain": {
+    "role": "人格与情绪：这个人是什么样的、为什么会那样反应",
+    "storage": "groq_rightbrain_memory.sqlite",
+    "tables": [
+      "right_brain_memories",
+      "right_brain_anchor_links",
+      "rb_slots",
+      "rb_entities",
+      "rb_entity_memories"
+    ]
+  },
+  "mem0": {
+    "role": "底层记忆引擎（向量检索）",
+    "dims": 384,
+    "vector_store": "qdrant (local)",
+    "path": "vectors/",
+    "collection": "voicemem",
+    "history": "groq_rightbrain_memory.sqlite"
+  },
+  "multi_modal": {
+    "role": "声纹、音频 embedding、原始 wav",
+    "path": "multi_modal/"
+  }
+}

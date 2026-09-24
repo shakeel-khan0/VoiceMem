@@ -12,6 +12,7 @@ results/
 /rtc_gateway/voicemem-rtc
 memory/
 out/
+/service/data/
 
 # 环境与本地配置
 .env
