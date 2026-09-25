@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import logging as _logging
+from time import perf_counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,7 +247,11 @@ class LeftBrainMemoryRepository:
         if not vector_items:
             return []
 
+        stage_started = perf_counter()
         saved_ids = self._vector_store.add_records_with_ids(user_id, vector_items)
+        _logging.getLogger("uvicorn.error").info(
+            "VoiceMem ingest stage=embedding_vector_write duration_ms=%.1f count=%d",
+            (perf_counter() - stage_started) * 1000, len(saved_ids))
         if len(saved_ids) != len(pending):
             # add_records_with_ids() 内部逐条调 mem0，个别条目失败时会比输入
             # 少——按位置截到实际成功写入的这些，不能整体错位关联到别的事实。
@@ -271,7 +277,11 @@ class LeftBrainMemoryRepository:
                     "updated_at": None,
                 }
             )
+        stage_started = perf_counter()
         self._write_json_store(results)
+        _logging.getLogger("uvicorn.error").info(
+            "VoiceMem ingest stage=json_persistence duration_ms=%.1f",
+            (perf_counter() - stage_started) * 1000)
 
         # 认知图写入：annotate facts → entities + slots + edges
         if self._cognitive_store is not None and self._cognitive_annotator is not None:

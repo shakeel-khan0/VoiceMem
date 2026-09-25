@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import contextlib
 import io
+import logging
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from voicemem import VoiceMem
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_MEMORY_MODEL = "openai/gpt-oss-120b"
 DEFAULT_MEMORY_ROOT = Path(__file__).resolve().parent / "data"
+logger = logging.getLogger("uvicorn.error")
 
 
 class SearchRequest(BaseModel):
@@ -112,11 +114,24 @@ class VoiceMemManager:
         """Manual preparation endpoint; the live Phase 2 agent never calls it."""
         if not self.available:
             raise RuntimeError("VoiceMem is unavailable")
+        started = perf_counter()
+        logger.info("VoiceMem ingest stage=request_arrival")
         # VoiceMem's standalone CLI prints truncated extracted facts. The
         # sidecar keeps private caller content out of production logs.
         captured = io.StringIO()
-        with self._ingest_lock, contextlib.redirect_stdout(captured):
-            result = self.client(request.caller_id).ingest(request.content)
+        lock_started = perf_counter()
+        with self._ingest_lock:
+            logger.info(
+                "VoiceMem ingest stage=lock_wait duration_ms=%.1f",
+                (perf_counter() - lock_started) * 1000,
+            )
+            with contextlib.redirect_stdout(captured):
+                result = self.client(request.caller_id).ingest(request.content)
+        logger.info(
+            "VoiceMem ingest stage=total duration_ms=%.1f memory_count=%d",
+            (perf_counter() - started) * 1000,
+            len(result.get("memory_ids", [])),
+        )
         internal_output = captured.getvalue()
         if "抽取失败" in internal_output or "没能入库" in internal_output:
             return {

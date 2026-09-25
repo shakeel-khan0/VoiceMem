@@ -28,9 +28,13 @@ import os as _os
 import os
 
 import json
+import logging
+from time import perf_counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_timing_logger = logging.getLogger("uvicorn.error")
 
 
 # ── 数据模型 ─────────────────────────────────────────────────────────────────
@@ -497,6 +501,7 @@ def ingest_voice_input(
     # 只用用户那半边召回候选：agent 的回复长得多，掺进来会把该比对的旧记忆挤出前 10
     query_text = "\n".join(str(m.get("content", "")) for m in messages
                            if m.get("role") != "assistant").strip()
+    stage_started = perf_counter()
     existing_for_extraction: list[dict[str, str]] = []
     if query_text and hasattr(repo, "search"):
         try:
@@ -510,6 +515,9 @@ def ingest_voice_input(
         except Exception:
             pass
     existing_for_extraction = _drop_other_named_people(existing_for_extraction)
+    _timing_logger.info(
+        "VoiceMem ingest stage=pre_extract_lookup duration_ms=%.1f candidates=%d",
+        (perf_counter() - stage_started) * 1000, len(existing_for_extraction))
 
     # ── Step 2: 抽取原子事实 ─────────────────────────────────────────────────
     # 原文兜底：抽取（走 OpenAI）失败或没抽到事实时，直接把整句原文当一条记忆存，
@@ -526,6 +534,7 @@ def ingest_voice_input(
         from voicemem.leftbrain.extract_facts_openai import ExtractedAdditiveMemory
         return [ExtractedAdditiveMemory(local_id="0", text=raw, attributed_to="user")]
 
+    stage_started = perf_counter()
     try:
         extracted = extractor.extract(
             new_messages=messages,
@@ -535,6 +544,9 @@ def ingest_voice_input(
         )
     except Exception as e:
         extracted = _raw_fallback()
+        _timing_logger.info(
+            "VoiceMem ingest stage=groq_extraction duration_ms=%.1f error_type=%s",
+            (perf_counter() - stage_started) * 1000, type(e).__name__)
         print(f"[ingest] 抽取失败（{e}）→ {'原文兜底入库' if extracted else '无原文，跳过'}", flush=True)
         if not extracted:
             return VoiceIngestResult(
@@ -543,6 +555,10 @@ def ingest_voice_input(
                 slots=vi.slots, messages_count=len(messages),
                 error=f"extraction_failed: {e}",
             )
+
+    _timing_logger.info(
+        "VoiceMem ingest stage=groq_extraction duration_ms=%.1f facts=%d",
+        (perf_counter() - stage_started) * 1000, len(extracted))
 
     if not extracted:
         extracted = _raw_fallback()
@@ -575,6 +591,7 @@ def ingest_voice_input(
     # resolver 不带单值属性规则），供消融对照。
     wide = os.environ.get("VOICEMEM_CONFLICT_WIDE", "1") != "0"
     new_fact_texts = [m.text for m in extracted if m.text]
+    stage_started = perf_counter()
     existing_map: dict[str, dict[str, str]] = {}
     if hasattr(repo, "search"):
         queries: list[tuple[str, int]] = [(t, 15 if wide else 5) for t in new_fact_texts]
@@ -594,6 +611,9 @@ def ingest_voice_input(
         except Exception:
             pass
     existing = _drop_other_named_people(existing)
+    _timing_logger.info(
+        "VoiceMem ingest stage=conflict_lookup duration_ms=%.1f candidates=%d",
+        (perf_counter() - stage_started) * 1000, len(existing))
 
     # 冲突判定（新事实 vs 库里已有 → ADD/UPDATE/DELETE）是一次 LLM 调用，而且
     # prompt 里要塞进已有记忆，**库越大越慢**：实测 95 条的库上这一次就要 10.2s，
@@ -604,6 +624,7 @@ def ingest_voice_input(
     always_add = _os.environ.get("VOICEMEM_ALWAYS_ADD", "0") == "1"
 
     resolutions = []
+    stage_started = perf_counter()
     if existing and new_fact_texts and not always_add:
         try:
             resolver = ConflictResolver(single_valued_rule=wide)
@@ -614,6 +635,11 @@ def ingest_voice_input(
 
     # ── Step 5: 执行决策 ──────────────────────────────────────────────────────
     # 若 resolve 成功，按决策执行；否则退回原始 ADD-only 路径
+    _timing_logger.info(
+        "VoiceMem ingest stage=groq_conflict_resolution duration_ms=%.1f used=%s",
+        (perf_counter() - stage_started) * 1000,
+        bool(existing and new_fact_texts and not always_add))
+
     if resolutions:
         # 建立 fact_text → ExtractedAdditiveMemory 映射，供 ADD 时复用 metadata
         fact_map = {m.text: m for m in extracted if m.text}
@@ -685,7 +711,11 @@ def ingest_voice_input(
         **({"background_sounds": vi.environment} if vi.environment else {}),
         **(extra_metadata or {}),
     }
+    stage_started = perf_counter()
     memory_ids = repo.append_extracted(extracted, user_id=user_id, extra_metadata=meta)
+    _timing_logger.info(
+        "VoiceMem ingest stage=left_brain_write duration_ms=%.1f memory_count=%d",
+        (perf_counter() - stage_started) * 1000, len(memory_ids or []))
     print(f"[ingest] 入库 {len(memory_ids or [])} 条：{[m.text[:20] for m in extracted][:3]}", flush=True)
 
     # 预分类 slot 写入 memory_tags

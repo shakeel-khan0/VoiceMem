@@ -1264,6 +1264,9 @@ class Orchestrator:
     def _finish_ingest(self, ctx: dict) -> dict:
         """Ingest() 里事实抽取 + 图谱写入（左脑/右脑）那部分，拆出来是为了让
         async_facts=True 时能扔进后台线程跑。"""
+        import logging
+        stage_logger = logging.getLogger("uvicorn.error")
+        finish_started = time.perf_counter()
         text = ctx["text"]; speaker = ctx["speaker"]; emotion = ctx["emotion"]
         entities = ctx["entities"]; session_id = ctx["session_id"]
         audio_path = ctx["audio_path"]; observed_at = ctx["observed_at"]
@@ -1293,12 +1296,16 @@ class Orchestrator:
 
         # 左脑事实抽取 + 入库（ingest_voice_input）抽进 LeftBrain.ingest_facts；
         # registry 是音频侧声纹姓名映射（跨域），由本类编排时注入。
+        stage_started = time.perf_counter()
         result = self._left.ingest_facts(
             vi,
             registry=self._get_registry(),
             session_id=session_id,
             extra_metadata={"created_at": observed_at} if observed_at else None,
         )
+        stage_logger.info(
+            "VoiceMem ingest stage=left_brain_total duration_ms=%.1f",
+            (time.perf_counter() - stage_started) * 1000)
 
         # 助手刚说的那句：**原样**存一条，不抽 fact。
         #
@@ -1407,17 +1414,26 @@ class Orchestrator:
                 print(f"[ingest] 存音乐轮失败：{e}", flush=True)
 
         # ── audiomem：场景/声纹标签写入 + 触发提醒 + 录音归档 + 主动推送 ─────────
+        stage_started = time.perf_counter()
         audiomem = self._write_audiomem_tags(
             result, scene_tag, scene_raw_labels, detection, audio_path,
             person_id, tune_result, abnormal_hits, ts, session_id, text,
         )
+        stage_logger.info(
+            "VoiceMem ingest stage=audiomem_persistence duration_ms=%.1f",
+            (time.perf_counter() - stage_started) * 1000)
         triggered_reminders = audiomem["triggered_reminders"]
         proactive_memories = audiomem["proactive_memories"]
         familiar_place_prompt = audiomem["familiar_place_prompt"]
         place_result = audiomem["place_result"]
         new_routine = audiomem["new_routine"]
 
+        stage_started = time.perf_counter()
         self._write_left_brain(result, text)
+        stage_logger.info(
+            "VoiceMem ingest stage=left_brain_metadata duration_ms=%.1f",
+            (time.perf_counter() - stage_started) * 1000)
+        stage_started = time.perf_counter()
         heartnote_id = self._write_right_brain(
             emotion, result, text, entities, observed_at, prior_reply)
         # 情绪归因：有必要才落一条回应经验。跟 heartnote 分开调——不该被
@@ -1427,6 +1443,9 @@ class Orchestrator:
             memory_id=(result.memory_ids[0] if result.memory_ids else None),
             observed_at=observed_at, heartnote_id=heartnote_id,
         )
+        stage_logger.info(
+            "VoiceMem ingest stage=right_brain_write duration_ms=%.1f",
+            (time.perf_counter() - stage_started) * 1000)
 
         # 异步清洁：每多 50 条 heartnote 触发一次
         threading.Thread(target=self._check_and_cleanup, daemon=True).start()
@@ -1463,6 +1482,9 @@ class Orchestrator:
         if turn_info["session_changed"]:
             self._run_session_boundary_batch()
 
+        stage_logger.info(
+            "VoiceMem ingest stage=finish_total duration_ms=%.1f",
+            (time.perf_counter() - finish_started) * 1000)
         return {
             "facts_count":         result.facts_count,
             "memory_ids":          result.memory_ids,
